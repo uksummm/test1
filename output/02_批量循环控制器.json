@@ -1,0 +1,186 @@
+{
+  "name": "02_批量循环控制器",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "627f6091-4c34-4727-817c-976cfc609b0e",
+      "name": "手动触发",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -980,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1qWq3m7lFtG7EY-AuaJ2OBc-JrKUKjI07eqfaolJi2S4",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "输入表",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "提示词状态",
+              "lookupValue": "提示词已生成"
+            },
+            {
+              "lookupColumn": "图片状态",
+              "lookupValue": "待生成图片"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fa1a7800-dc2f-4fe5-8c1a-a44476a81a6c",
+      "name": "读取待处理行",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -760,
+        240
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "rW2neYdMN1LklYb7",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const count = $input.all().length;\nconst out = [];\nfor (let i = 0; i < count; i++) out.push({ json: { loopIndex: i + 1, total: count } });\nreturn out;"
+      },
+      "id": "7213f848-e023-4c31-b5c2-78456280e03c",
+      "name": "生成循环次数",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1
+      },
+      "id": "94d218bf-7753-4553-ab3f-679e8de6855b",
+      "name": "循环控制",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -320,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": "={{ $env.WORKFLOW_A_ID || \"\" }}",
+        "options": {}
+      },
+      "id": "5a26445e-ff92-4a3a-82cd-cfc7270fdffd",
+      "name": "调用工作流A",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        -90,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "b566f863-0b69-48e9-a1e3-3198c00ed601",
+      "name": "等待15秒",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        130,
+        240
+      ]
+    }
+  ],
+  "connections": {
+    "手动触发": {
+      "main": [
+        [
+          {
+            "node": "读取待处理行",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取待处理行": {
+      "main": [
+        [
+          {
+            "node": "生成循环次数",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "生成循环次数": {
+      "main": [
+        [
+          {
+            "node": "循环控制",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "循环控制": {
+      "main": [
+        [
+          {
+            "node": "调用工作流A",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "调用工作流A": {
+      "main": [
+        [
+          {
+            "node": "等待15秒",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待15秒": {
+      "main": [
+        [
+          {
+            "node": "循环控制",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "ec89abc9-9bcc-4085-8695-488fe51f6276",
+  "meta": {},
+  "id": "1b0632a3-ca13-40cb-b0c1-841a35c83cae",
+  "tags": []
+}
