@@ -1,0 +1,746 @@
+{
+  "name": "细节保真图片优先-V5.1-工作流3-图片生成",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "183f4fc7-e96e-44b0-8910-15a394ffa488",
+      "name": "手动触发",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1296,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1qWq3m7lFtG7EY-AuaJ2OBc-JrKUKjI07eqfaolJi2S4",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "输入表",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "图片状态",
+              "lookupValue": "待生成图片"
+            }
+          ]
+        },
+        "options": {
+          "returnFirstMatch": true
+        }
+      },
+      "id": "80ddacce-3585-40d8-b20c-c281aab07491",
+      "name": "读取待生成行",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -1072,
+        144
+      ],
+      "retryOnFail": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "rW2neYdMN1LklYb7",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-filter-001",
+              "leftValue": "={{ $json['图片状态'] }}",
+              "rightValue": "待生成图片",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d7e607e1-d72a-464f-a54d-e8d0d2aa2f6d",
+      "name": "筛选待生成",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        -848,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 提取关键字段并准备数据\nconst item = $input.first().json;\n\n// 从「模型选择」列提取模型名称（取 - 前面的部分）\nconst modelRaw = (item['模型选择'] || '').trim();\nconst modelName = modelRaw.split('-')[0].trim();\n\n// 模型名称 → OpenRouter model ID 映射\nconst MODEL_MAP = {\n  'Nano Banana 2': 'google/gemini-3.1-flash-image-preview',\n  'Nano Banana Pro': 'google/gemini-3-pro-image-preview',\n  'GPT': 'openai/gpt-5-image',\n  'FLUX.2Pro': 'black-forest-labs/flux.2-pro',\n  'FLUX.2 Pro': 'black-forest-labs/flux.2-pro',\n  'FLUX.2Max': 'black-forest-labs/flux.2-max',\n  'FLUX.2 Max': 'black-forest-labs/flux.2-max'\n};\n\n// 匹配模型ID（支持模糊匹配）\nlet modelId = '';\nlet isFlux = false;\nfor (const [key, value] of Object.entries(MODEL_MAP)) {\n  if (modelName.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(modelName.toLowerCase())) {\n    modelId = value;\n    isFlux = value.startsWith('black-forest-labs');\n    break;\n  }\n}\n\n// 如果没匹配到，尝试更宽松的匹配\nif (!modelId) {\n  if (modelName.toLowerCase().includes('nano') && modelName.includes('2')) {\n    modelId = 'google/gemini-3.1-flash-image-preview';\n  } else if (modelName.toLowerCase().includes('nano') && modelName.toLowerCase().includes('pro')) {\n    modelId = 'google/gemini-3-pro-image-preview';\n  } else if (modelName.toLowerCase().includes('gpt')) {\n    modelId = 'openai/gpt-5-image';\n  } else if (modelName.toLowerCase().includes('flux') && modelName.toLowerCase().includes('max')) {\n    modelId = 'black-forest-labs/flux.2-max';\n    isFlux = true;\n  } else if (modelName.toLowerCase().includes('flux')) {\n    modelId = 'black-forest-labs/flux.2-pro';\n    isFlux = true;\n  } else {\n    // 默认用 Nano Banana 2\n    modelId = 'google/gemini-3.1-flash-image-preview';\n  }\n}\n\n// 尺寸映射\nconst sizeRaw = (item['尺寸选择'] || '').trim();\nlet aspectRatio = '1:1';\nlet imageSize = '1K';\nif (sizeRaw.includes('16:9') || sizeRaw.includes('16：9')) aspectRatio = '16:9';\nelse if (sizeRaw.includes('9:16') || sizeRaw.includes('9：16')) aspectRatio = '9:16';\nelse if (sizeRaw.includes('4:3') || sizeRaw.includes('4：3')) aspectRatio = '4:3';\nelse if (sizeRaw.includes('3:4') || sizeRaw.includes('3：4')) aspectRatio = '3:4';\nelse if (sizeRaw.includes('3:2') || sizeRaw.includes('3：2')) aspectRatio = '3:2';\nelse if (sizeRaw.includes('2:3') || sizeRaw.includes('2：3')) aspectRatio = '2:3';\n\nif (sizeRaw.includes('2K') || sizeRaw.includes('2k')) imageSize = '2K';\nelse if (sizeRaw.includes('4K') || sizeRaw.includes('4k')) imageSize = '4K';\n\n// 生成数量\nconst generateCount = parseInt(item['每次生成数量']) || 1;\n\n// 任务ID\nconst taskId = item['任务ID'] || `task-${item.row_number}-${Date.now()}`;\n\n// 提示词\nconst prompt = item['自定义提示词-自动生成-工作流'] || '';\n\n// 产品图链接（可能有多张，用逗号或换行分隔）\nconst productImageLinks = (item['产品图链接-同产品最多3张'] || '').trim();\n\n// modalities 设置\nconst modalities = isFlux ? ['image'] : ['image', 'text'];\n\nreturn [{\n  json: {\n    modelId,\n    modelName,\n    isFlux,\n    aspectRatio,\n    imageSize,\n    generateCount,\n    taskId,\n    prompt,\n    productImageLinks,\n    modalities,\n    row_number: item.row_number,\n    originalData: item\n  }\n}];"
+      },
+      "id": "7ecdb738-ed8a-4e75-bcb1-ae9ebc8c12e5",
+      "name": "解析参数+模型路由",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 根据生成数量拆分为多个任务项\nconst item = $input.first().json;\nconst count = item.generateCount || 1;\nconst results = [];\n\nfor (let i = 1; i <= count; i++) {\n  results.push({\n    json: {\n      ...item,\n      currentIndex: i,\n      fileName: `${item.taskId}_${i}.png`\n    }\n  });\n}\n\nreturn results;"
+      },
+      "id": "f143ee10-65ff-497e-911e-21ee875382b3",
+      "name": "按数量拆分任务",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "e7802e6b-686b-4d55-8e66-f02c23be0ef4",
+      "name": "逐张生图循环",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -160,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 下载产品图并转为 base64 (V6 · 方案B无认证版)\n// 前提: Drive文件夹必须设为\"知道链接的任何人可访问\"\n// 改动: 使用公开URL访问,跳过OAuth (因为Code节点不支持httpRequestWithAuthentication)\nconst item = $input.first().json;\nconst links = item.productImageLinks;\n\n// ========== 视角识别(通过文件名) ==========\nfunction detectView(fileName) {\n  const name = (fileName || '').toLowerCase();\n  if (/(^|[_\\-\\s\\.])front([_\\-\\s\\.]|$)|正面/.test(name)) return 'front';\n  if (/(^|[_\\-\\s\\.])side([_\\-\\s\\.]|$)|侧面/.test(name)) return 'side';\n  if (/(^|[_\\-\\s\\.])(back|rear)([_\\-\\s\\.]|$)|背面/.test(name)) return 'back';\n  return 'unknown';\n}\n\nconst VIEW_ORDER = { front: 1, side: 2, back: 3, unknown: 99 };\n\n// ========== 从场景prompt自动推断主视角 ==========\nfunction inferPrimaryViewFromPrompt(prompt) {\n  if (!prompt || typeof prompt !== 'string') return 'front';\n  const p = prompt.toLowerCase();\n\n  let scoreFront = 0;\n  let scoreSide = 0;\n  let scoreBack = 0;\n\n  const frontStrong = [\n    'facing camera', 'facing the camera', 'looking at camera', 'looking at the camera',\n    'looking directly at camera', 'front view', 'frontal angle', 'frontal shot',\n    'forward-facing', 'front-facing', 'face-on', 'straight on',\n    'head-on', 'direct frontal', 'looking directly into',\n    '正面', '面向镜头', '朝向镜头'\n  ];\n  const frontWeak = [\n    'face visible', 'full face', 'eye contact', 'looking up',\n    'looking into', 'centered', 'symmetric', 'portrait'\n  ];\n\n  const sideStrong = [\n    'side view', 'side profile', 'profile shot', 'profile view',\n    'side angle', 'from the side', 'sitting sideways', 'lying on side',\n    'walking in profile', 'walking sideways', 'side-on',\n    '侧面', '侧身', '侧视'\n  ];\n  const sideWeak = [\n    'walking', 'running', 'in motion', 'mid-stride',\n    'lateral', 'sideways'\n  ];\n\n  const backStrong = [\n    'back view', 'from behind', 'rear view', 'rear angle',\n    'facing away', 'looking away', 'back to camera',\n    'walking away', 'turned away', 'from the back',\n    '背面', '背对', '背影', '背向'\n  ];\n  const backWeak = [\n    'over the shoulder', 'looking over shoulder', 'glancing back',\n    'tail visible', 'rear'\n  ];\n\n  frontStrong.forEach(kw => { if (p.includes(kw)) scoreFront += 3; });\n  frontWeak.forEach(kw => { if (p.includes(kw)) scoreFront += 1; });\n  sideStrong.forEach(kw => { if (p.includes(kw)) scoreSide += 3; });\n  sideWeak.forEach(kw => { if (p.includes(kw)) scoreSide += 1; });\n  backStrong.forEach(kw => { if (p.includes(kw)) scoreBack += 3; });\n  backWeak.forEach(kw => { if (p.includes(kw)) scoreBack += 1; });\n\n  const threeQuarter = [\n    'three-quarter', 'three quarter', '3/4', 'slightly turned',\n    'slightly angled', 'head tilted'\n  ];\n  threeQuarter.forEach(kw => {\n    if (p.includes(kw)) scoreFront += 2;\n  });\n\n  const maxScore = Math.max(scoreFront, scoreSide, scoreBack);\n  if (maxScore === 0) return 'front';\n  if (scoreFront >= scoreSide && scoreFront >= scoreBack) return 'front';\n  if (scoreBack > scoreSide) return 'back';\n  return 'side';\n}\n\n// ========== 主视角决策 ==========\nfunction determinePrimaryView(item) {\n  const manualView = (item.originalData?.['主要视角'] ||\n                      item['主要视角'] ||\n                      '').toString().trim().toLowerCase();\n\n  if (['front', '正面'].includes(manualView)) return { view: 'front', source: 'manual' };\n  if (['side', '侧面'].includes(manualView)) return { view: 'side', source: 'manual' };\n  if (['back', 'rear', '背面'].includes(manualView)) return { view: 'back', source: 'manual' };\n  if (['all', 'multi', '多视角', '全部'].includes(manualView)) return { view: 'all', source: 'manual' };\n\n  const promptText = item.prompt || '';\n  const inferredView = inferPrimaryViewFromPrompt(promptText);\n  return { view: inferredView, source: 'inferred' };\n}\n\nif (!links) {\n  return [{\n    json: {\n      ...item,\n      productImages: [],\n      imageErrors: ['未提供 productImageLinks']\n    }\n  }];\n}\n\nconst urls = links\n  .split(/[,\\n\\s]+/)\n  .map(u => u.trim())\n  .filter(u => u.startsWith('http'));\n\nconst rawImages = [];\nconst errors = [];\n\n// ========== 无认证下载单个Drive文件 ==========\nasync function downloadPublicDriveFile(fileId, fileName) {\n  try {\n    const url = `https://drive.google.com/uc?export=download&id=${fileId}`;\n\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      encoding: 'arraybuffer',\n      returnFullResponse: true,\n      followRedirect: true,\n      timeout: 30000,\n      headers: { 'User-Agent': 'Mozilla/5.0' }\n    });\n\n    const contentType = response.headers?.['content-type'] || response.headers?.['Content-Type'] || '';\n\n    if (!contentType.startsWith('image/')) {\n      errors.push(`文件不是图片: ${fileName} (${fileId}) | type=${contentType} | 提示:文件必须设为公开访问`);\n      return;\n    }\n\n    const base64 = Buffer.from(response.body).toString('base64');\n    rawImages.push({\n      fileName: fileName || '',\n      view: detectView(fileName),\n      image: {\n        type: 'image_url',\n        image_url: {\n          url: `data:${contentType};base64,${base64}`\n        }\n      }\n    });\n  } catch (err) {\n    errors.push(`Drive文件下载失败: ${fileName || fileId} | ${err.message} | 提示:文件必须设为公开访问`);\n  }\n}\n\n// ========== 无认证列出文件夹内容 ==========\n// 注意:Google Drive没有直接的公开API列出文件夹内容\n// 这里用一个变通方案: 解析文件夹的公开HTML页面提取文件ID\nasync function listPublicDriveFolder(folderId) {\n  try {\n    const url = `https://drive.google.com/embeddedfolderview?id=${folderId}#list`;\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url,\n      timeout: 15000,\n      headers: { 'User-Agent': 'Mozilla/5.0' }\n    });\n\n    const html = typeof response === 'string' ? response : (response.body || '');\n    const files = [];\n    \n    // 从HTML中提取文件ID和文件名\n    // 文件链接格式: /file/d/{fileId}/view\n    const fileRegex = /\\/file\\/d\\/([a-zA-Z0-9_-]+)\\/view[^\"]*\"[^>]*>(?:[^<]*<[^>]*>)*([^<]+?)<\\/div>/g;\n    // 备用更宽松的正则\n    const idRegex = /\\/file\\/d\\/([a-zA-Z0-9_-]+)/g;\n    const nameRegex = /<div class=\"flip-entry-title\">([^<]+)<\\/div>/g;\n    \n    const ids = [];\n    let m;\n    while ((m = idRegex.exec(html)) !== null) {\n      if (!ids.includes(m[1])) ids.push(m[1]);\n    }\n    \n    const names = [];\n    while ((m = nameRegex.exec(html)) !== null) {\n      names.push(m[1]);\n    }\n    \n    // 配对ID和name(按出现顺序)\n    for (let i = 0; i < ids.length; i++) {\n      files.push({\n        id: ids[i],\n        name: names[i] || `file_${i}.jpg`\n      });\n    }\n    \n    return files;\n  } catch (err) {\n    errors.push(`列出文件夹失败: ${folderId} | ${err.message} | 提示:文件夹必须设为公开访问`);\n    return [];\n  }\n}\n\nfor (const rawUrl of urls) {\n  try {\n    // ===== Case 1: Google Drive 文件夹链接 =====\n    const folderMatch = rawUrl.match(/drive\\.google\\.com\\/drive\\/folders\\/([^/?]+)/);\n    if (folderMatch && folderMatch[1]) {\n      const folderId = folderMatch[1];\n      const files = await listPublicDriveFolder.call(this, folderId);\n\n      if (files.length === 0) {\n        errors.push(`文件夹为空或无法访问: ${rawUrl} | 请确认文件夹已设为\"知道链接的任何人可访问\"`);\n        continue;\n      }\n\n      for (const file of files) {\n        await downloadPublicDriveFile.call(this, file.id, file.name);\n      }\n      continue;\n    }\n\n    // ===== Case 2: Google Drive 单文件链接 =====\n    const fileMatch = rawUrl.match(/drive\\.google\\.com\\/file\\/d\\/([^/?]+)/);\n    if (fileMatch && fileMatch[1]) {\n      await downloadPublicDriveFile.call(this, fileMatch[1], rawUrl);\n      continue;\n    }\n\n    // ===== Case 3: 普通图片URL =====\n    const response = await this.helpers.httpRequest({\n      method: 'GET',\n      url: rawUrl,\n      encoding: 'arraybuffer',\n      returnFullResponse: true,\n      followRedirect: true,\n      timeout: 30000,\n      headers: { 'User-Agent': 'Mozilla/5.0' }\n    });\n\n    const contentType = response.headers?.['content-type'] || response.headers?.['Content-Type'] || '';\n\n    if (!contentType.startsWith('image/')) {\n      errors.push(`下载结果不是图片: ${rawUrl} | type=${contentType}`);\n      continue;\n    }\n\n    const base64 = Buffer.from(response.body).toString('base64');\n    const fileName = rawUrl.split('/').pop() || '';\n    rawImages.push({\n      fileName,\n      view: detectView(fileName),\n      image: {\n        type: 'image_url',\n        image_url: { url: `data:${contentType};base64,${base64}` }\n      }\n    });\n\n  } catch (err) {\n    errors.push(`下载失败: ${rawUrl} | ${err.message}`);\n  }\n}\n\n// 按 front → side → back 排序\nrawImages.sort((a, b) => VIEW_ORDER[a.view] - VIEW_ORDER[b.view]);\n\n// ========== 智能筛选主视角参考图 ==========\nconst { view: primaryView, source: viewSource } = determinePrimaryView(item);\n\nlet finalImages;\nif (primaryView === 'all') {\n  finalImages = rawImages.slice(0, 3);\n} else {\n  const matchedImages = rawImages.filter(img => img.view === primaryView);\n\n  if (matchedImages.length > 0) {\n    finalImages = matchedImages.slice(0, 1);\n  } else {\n    const frontImages = rawImages.filter(img => img.view === 'front');\n    if (frontImages.length > 0) {\n      finalImages = frontImages.slice(0, 1);\n    } else if (rawImages.length > 0) {\n      finalImages = rawImages.slice(0, 1);\n    } else {\n      finalImages = [];\n    }\n  }\n}\n\nconst productImages = finalImages.map(i => i.image);\nconst productImageViews = finalImages.map(i => i.view);\nconst productImageNames = finalImages.map(i => i.fileName);\n\nreturn [{\n  json: {\n    ...item,\n    productImages,\n    productImageViews,\n    productImageNames,\n    imageErrors: errors,\n    usedPrimaryView: primaryView,\n    primaryViewSource: viewSource\n  }\n}];\n"
+      },
+      "id": "70bfed5b-092a-4a36-8bab-f7106a1e6cdb",
+      "name": "下载产品图转base64",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 组装 OpenRouter API 请求体 (v7 · 严格职责分离)\nconst item = $input.first().json;\n\n// ========== 从[PRODUCT]段提取否定锚定关键词 ==========\nfunction extractNegativeAnchors(prompt) {\n  if (!prompt) return [];\n  const productMatch = prompt.match(/\\[PRODUCT\\]:?\\s*([\\s\\S]*?)(?=\\[LIGHTING\\]|\\[CAMERA\\]|\\[TEXT\\]|\\[STYLE\\]|$)/i);\n  if (!productMatch) return [];\n  const productText = productMatch[1];\n\n  const anchors = [];\n  const notMatches = productText.match(/NOT\\s+[^,.—\\n]+/gi) || [];\n  notMatches.forEach(m => anchors.push(m.trim()));\n  const noMatches = productText.match(/NO\\s+[^,.—\\n]+/gi) || [];\n  noMatches.forEach(m => anchors.push(m.trim()));\n\n  return [...new Set(anchors)];\n}\n\n// ========== 动态 System Prompt ==========\nconst imageCount = (item.productImages || []).length;\nconst isSingleImage = imageCount <= 1;\n\n// 精简版: 单张参考图时使用(严格职责分离版)\nconst singleImageSystemPrompt = `You are an expert e-commerce product photographer creating a NEW scene image.\n\nYou will receive TWO INPUTS with STRICTLY DIFFERENT ROLES. Understanding this separation is CRITICAL.\n\n═══════════════════════════════════════════\nINPUT 1: REFERENCE PHOTO — PRODUCT APPEARANCE ONLY\n═══════════════════════════════════════════\n\nThe reference photo serves ONE purpose: to show you EXACTLY what the product looks like.\n\nEXTRACT from the photo (copy these):\n- Product color (exact shade)\n- Product material and texture\n- Closure type, count, placement, symmetry (e.g. asymmetric diagonal)\n- Collar/neckline shape\n- Sleeve length, cuff style\n- Hardware color and count\n- All structural details (straps, patches, trims, seams)\n\nIGNORE from the photo (DO NOT copy any of these):\n- The background (color, texture, setting, any environmental elements)\n- The lighting direction, intensity, warmth, or shadow style\n- The camera angle, framing, distance, or depth of field\n- The pet's breed, fur length, color pattern, or markings (if a pet is wearing the product)\n- The pet's pose, expression, positioning, or body language\n- Any props, objects, or staging elements\n\nThe reference photo is just a PRODUCT CATALOG SHOT or a previous photoshoot. You are NOT reproducing that shoot.\nYou are TAKING A NEW PHOTOGRAPH in a completely different setting with potentially a different model pet.\n\n═══════════════════════════════════════════\nINPUT 2: TEXT PROMPT — THE NEW SCENE TO CREATE\n═══════════════════════════════════════════\n\nThe text prompt defines EVERYTHING ELSE about the new image. Follow it strictly:\n\n- [SCENE]: The environment, background, setting, props, atmosphere. CREATE this scene from scratch.\n- [SUBJECT]: The pet's breed, coat color/pattern, fur length, pose, expression, positioning. This pet may be COMPLETELY DIFFERENT from the pet in the reference photo — you must follow the text description, not the reference photo's pet.\n- [LIGHTING]: The light direction, quality, warmth, shadow style. Light the scene as described, NOT as lit in the reference.\n- [CAMERA]: The angle, framing, depth of field, lens character. Frame the shot as described.\n- [STYLE]: The overall photographic style and quality.\n\n═══════════════════════════════════════════\nTHE CORE SEPARATION PRINCIPLE\n═══════════════════════════════════════════\n\nThink of it this way:\n- The reference photo = a PRODUCT SWATCH showing what the garment looks like\n- The text prompt = the ART DIRECTOR'S BRIEF for a brand new photoshoot\n\nA product photographer doing a NEW SHOOT never copies the previous catalog's background,\nlighting, pet model, or composition. They take the GARMENT, put it on a NEW pet (as briefed),\nplace them in a NEW setting (as briefed), light them DIFFERENTLY (as briefed), and frame\nthe shot DIFFERENTLY (as briefed).\n\nYou must do exactly that. The output image should look COMPLETELY DIFFERENT from the\nreference photo — different background, different lighting, potentially a different pet breed,\ndifferent pose, different camera angle. ONLY the product itself should match.\n\n═══════════════════════════════════════════\nCONFLICT RESOLUTION — APPLY THIS TEST\n═══════════════════════════════════════════\n\nWhen text and photo seemingly conflict, ask: \"Is this about the PRODUCT or about the SCENE/MODEL/FRAMING?\"\n\nPHOTO WINS for product appearance:\n- Text says \"blue jacket\" but photo shows brown → render BROWN (photo = product color truth)\n- Text says \"centered buttons\" but photo shows asymmetric diagonal → render ASYMMETRIC (photo = product structure truth)\n- Text says \"silver hardware\" but photo shows brass → render BRASS (photo = hardware truth)\n- Text mentions a feature not visible in photo → do NOT render it (photo = ground truth for what exists)\n\nTEXT WINS for everything else:\n- Text says \"British Shorthair cream cat\" but photo shows a Maine Coon silver tabby → render BRITISH SHORTHAIR CREAM (text = model choice)\n- Text says \"outdoor park scene\" but photo has plain studio background → render OUTDOOR PARK (text = scene)\n- Text says \"three-quarter angle, cat looking up\" but photo shows front-facing sitting → render THREE-QUARTER LOOKING UP (text = pose/angle)\n- Text says \"golden hour warm light from left\" but photo has flat studio lighting → render GOLDEN HOUR FROM LEFT (text = lighting)\n- Text says \"shallow depth of field with blurred background\" but photo is fully sharp → render with BLURRED BACKGROUND (text = camera)\n\n═══════════════════════════════════════════\nPRODUCT FIDELITY RULES (for the product only)\n═══════════════════════════════════════════\n\n1. COLOR: Match the exact color tone from the reference photo. Do not shift hue.\n2. MATERIAL: Reproduce the exact surface texture visible in the reference.\n3. HARDWARE & CLOSURES: Match type, count, placement, and color exactly.\n4. STRUCTURE: Render asymmetric/diagonal closures if shown; render specific collar shapes exactly.\n5. DETAILS: If a decoration is not visible in the reference, do NOT add it. If one IS visible, include it.\n\nDO NOT:\n- Copy the background from the reference photo\n- Copy the lighting setup from the reference photo\n- Copy the pet's breed/color/pose from the reference photo — follow [SUBJECT] in the text\n- Copy the camera angle from the reference photo — follow [CAMERA] in the text\n- \"Improve\" or \"beautify\" the product — reproduce it AS-IS\n- Default to generic shapes (centered closure, stand-up collar, silver hardware) when the photo shows something specific`;\n\n// 完整版: 多张参考图时使用\nconst multiImageSystemPrompt = `You are an expert e-commerce product photographer creating a NEW scene image.\n\nYou will receive multiple reference photos (front/side/back views) of a REAL product, and a text prompt describing a NEW scene.\n\n═══════════════════════════════════════════\nSTRICT ROLE SEPARATION\n═══════════════════════════════════════════\n\nREFERENCE PHOTOS are for PRODUCT APPEARANCE ONLY:\n- Extract: color, material, closures, collar, sleeves, hardware, structure\n- IGNORE: background, lighting, pet breed/pose, camera angle, composition\n\nTEXT PROMPT defines the NEW SCENE:\n- Follow [SCENE]/[SUBJECT]/[LIGHTING]/[CAMERA]/[STYLE] exactly\n- The pet breed, pose, setting, and lighting come from the TEXT, not the photos\n- The output must look COMPLETELY DIFFERENT from the reference photos (different background, lighting, pet, composition)\n\n═══════════════════════════════════════════\nTHREE-VIEW REFERENCE HANDLING (for product appearance only)\n═══════════════════════════════════════════\n- FRONT VIEW: highest authority for color, front hardware, collar shape\n- SIDE VIEW: authority for sleeve length, cuff style, silhouette\n- BACK VIEW: authority for back panel, rear details, hem\n\n═══════════════════════════════════════════\nCONFLICT RESOLUTION\n═══════════════════════════════════════════\n\nPHOTO WINS for product appearance (color, closure, hardware, material, structure).\nTEXT WINS for scene, lighting, camera, pet breed, pose, and composition.\n\nDO NOT:\n- Copy the background, lighting, or pet from the reference photos\n- Add product features not visible in any reference view\n- Substitute closures or hardware colors\n- \"Improve\" the product`;\n\nconst systemPrompt = isSingleImage ? singleImageSystemPrompt : multiImageSystemPrompt;\n\n// ========== 构建 user message content ==========\nconst content = [];\n\nconst hasImages = item.productImages && item.productImages.length > 0;\nconst views = item.productImageViews || [];\nconst names = item.productImageNames || [];\nconst hasViewLabels = views.some(v => v && v !== 'unknown');\n\n// 提取否定锚定用于参考图观察清单\nconst negativeAnchors = extractNegativeAnchors(item.prompt);\nconst anchorText = negativeAnchors.length > 0\n  ? `\\n\\nCRITICAL NEGATIVE ANCHORS from the product description (common mistakes to AVOID when rendering the product):\\n${negativeAnchors.map(a => `- ${a}`).join('\\n')}`\n  : '';\n\nif (hasImages) {\n  if (isSingleImage) {\n    // ============ 单图模式 ============\n    const viewLabel = views[0] || 'unknown';\n    const viewName = {\n      front: 'FRONT VIEW',\n      side: 'SIDE VIEW',\n      back: 'BACK VIEW',\n      unknown: 'PRODUCT REFERENCE'\n    }[viewLabel] || 'PRODUCT REFERENCE';\n\n    content.push({\n      type: 'text',\n      text: `═══════════════════════════════════════════\nPRODUCT REFERENCE PHOTO (${viewName})\n═══════════════════════════════════════════\n\n⚠️ This photo shows the EXACT product to reproduce in terms of APPEARANCE ONLY.\n\nSTUDY ONLY these product details:\n- Exact shade of color\n- Type and COUNT of closures (snap? button? velcro? zipper?)\n- Symmetric vs asymmetric closure structure\n- Hardware color (silver / gold / brass / black — be exact)\n- Collar/neckline EXACT shape\n- Sleeve length and cuff style\n- Material and texture\n- Any signature details${anchorText}\n\n⚠️ DO NOT copy from this photo:\n- The background (you will create a NEW scene from the text prompt)\n- The lighting (you will use the lighting described in the text)\n- The pet's breed, coat, pose, or expression (you will follow the [SUBJECT] in the text)\n- The camera angle or framing (you will follow the [CAMERA] in the text)`\n    });\n\n    content.push(item.productImages[0]);\n\n    content.push({\n      type: 'text',\n      text: `═══════════════════════════════════════════\nNEW SCENE TO CREATE (follow this text strictly)\n═══════════════════════════════════════════\n\n⚠️ The text below describes a NEW photograph you must create. The ONLY element from the reference photo above that should appear in your output is the PRODUCT itself (matching color, closures, hardware, structure). Everything else — background, lighting, pet breed, pose, camera angle — comes from this text:\n\n${item.prompt}\n\n═══════════════════════════════════════════\nFINAL REMINDER\n═══════════════════════════════════════════\nYour output image should look NOTHING like the reference photo in terms of setting, lighting, pet, or composition. Only the PRODUCT should match. Create a FRESH photograph in the scene described above.`\n    });\n  } else if (hasViewLabels) {\n    // ============ 多图三视图模式 ============\n    const viewDescriptions = {\n      front: 'FRONT VIEW — color, hardware, collar shape',\n      side: 'SIDE VIEW — sleeve length, cuff style, silhouette',\n      back: 'BACK VIEW — back panel, rear collar, hem',\n      unknown: 'ADDITIONAL REFERENCE'\n    };\n\n    content.push({\n      type: 'text',\n      text: `PRODUCT REFERENCE PHOTOS (${item.productImages.length} views) — for PRODUCT APPEARANCE ONLY.\nStudy these for color/structure/hardware. IGNORE backgrounds, lighting, pets, and composition.${anchorText}`\n    });\n\n    item.productImages.forEach((img, idx) => {\n      const view = views[idx] || 'unknown';\n      const name = names[idx] || '';\n      content.push({\n        type: 'text',\n        text: `\\n[Image ${idx + 1}] = ${viewDescriptions[view]}${name ? ` (${name})` : ''}`\n      });\n      content.push(img);\n    });\n\n    content.push({\n      type: 'text',\n      text: `\\n═══════════════════════════════════════════\nNEW SCENE TO CREATE (follow this text strictly, ignore reference backgrounds/lighting/pets)\n═══════════════════════════════════════════\n\n${item.prompt}\n\nREMINDER: Output must look COMPLETELY DIFFERENT from reference photos in terms of setting, lighting, pet, and composition. Only the PRODUCT should match.`\n    });\n  } else {\n    // ============ 向后兼容 ============\n    content.push({\n      type: 'text',\n      text: `REFERENCE PHOTOS (${item.productImages.length} images) — for PRODUCT APPEARANCE ONLY.\nIgnore backgrounds, lighting, pets, composition.${anchorText}`\n    });\n\n    for (const img of item.productImages) {\n      content.push(img);\n    }\n\n    content.push({\n      type: 'text',\n      text: `\\nNEW SCENE (follow text, ignore reference backgrounds/lighting/pets):\\n\\n${item.prompt}`\n    });\n  }\n} else {\n  content.push({\n    type: 'text',\n    text: item.prompt\n  });\n}\n\n// ========== 构建消息数组 ==========\nlet messages = [];\n\nif (!item.isFlux) {\n  messages = [\n    {\n      role: 'system',\n      content: systemPrompt\n    },\n    {\n      role: 'user',\n      content: content\n    }\n  ];\n} else {\n  messages = [\n    {\n      role: 'user',\n      content: item.prompt\n    }\n  ];\n}\n\n// ========== 构建请求体 ==========\nconst requestBody = {\n  model: item.modelId,\n  messages: messages,\n  modalities: item.modalities,\n  image_config: {\n    aspect_ratio: item.aspectRatio,\n    image_size: item.imageSize\n  }\n};\n\nconst requestBodyString = JSON.stringify(requestBody);\n\nreturn [\n  {\n    json: {\n      fileName: item.fileName,\n      taskId: item.taskId,\n      row_number: item.row_number,\n      currentIndex: item.currentIndex,\n      generateCount: item.generateCount,\n      modelId: item.modelId,\n      modelName: item.modelName,\n      isFlux: item.isFlux,\n      aspectRatio: item.aspectRatio,\n      imageSize: item.imageSize,\n      prompt: item.prompt,\n      productImages: item.productImages,\n      productImageViews: item.productImageViews,\n      productImageNames: item.productImageNames,\n      imageErrors: item.imageErrors,\n      originalData: item.originalData,\n      requestBody,\n      requestBodyString\n    }\n  }\n];"
+      },
+      "id": "354e0fc7-411e-4b7e-920d-39a0731a48b0",
+      "name": "组装API请求",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBodyString }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "76034b0d-4623-4ce7-ae24-b21806ecf9a0",
+      "name": "调用OpenRouter生图",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dJLXnD46n9lYcQ5R",
+          "name": "openrouter"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析 OpenRouter 返回，提取 base64 图片\nconst item = $input.first().json;\nconst response = item.body || item;\n\ntry {\n  let data = response;\n  if (typeof response === 'string') {\n    data = JSON.parse(response);\n  }\n  \n  if (data.error) {\n    throw new Error(`API Error: ${JSON.stringify(data.error)}`);\n  }\n  \n  const choices = data.choices || [];\n  if (choices.length === 0) {\n    throw new Error('No choices in response');\n  }\n  \n  const message = choices[0].message || {};\n  \n  let imageDataUrl = '';\n  \n  // 方式1: images 数组（标准格式）\n  if (message.images && message.images.length > 0) {\n    imageDataUrl = message.images[0].image_url?.url || '';\n  }\n  \n  // 方式2: content 中的 image_url\n  if (!imageDataUrl && message.content) {\n    if (Array.isArray(message.content)) {\n      for (const part of message.content) {\n        if (part.type === 'image_url' && part.image_url?.url) {\n          imageDataUrl = part.image_url.url;\n          break;\n        }\n      }\n    } else if (typeof message.content === 'string' && message.content.startsWith('data:image')) {\n      imageDataUrl = message.content;\n    }\n  }\n  \n  if (!imageDataUrl) {\n    throw new Error('No image found in response. Raw: ' + JSON.stringify(data).substring(0, 500));\n  }\n  \n  let imageBase64 = '';\n  if (imageDataUrl.startsWith('data:')) {\n    imageBase64 = imageDataUrl.split(',')[1];\n  } else {\n    imageBase64 = imageDataUrl;\n  }\n  \n  // 从上游获取字段\n  const upstream = $('组装API请求').first().json;\n  \n  return [{\n    json: {\n      success: true,\n      imageBase64,\n      fileName: upstream.fileName,\n      taskId: upstream.taskId,\n      row_number: upstream.row_number,\n      currentIndex: upstream.currentIndex,\n      generateCount: upstream.generateCount\n    }\n  }];\n  \n} catch (err) {\n  const upstream = $('组装API请求').first().json;\n  return [{\n    json: {\n      success: false,\n      error: err.message,\n      fileName: upstream.fileName,\n      taskId: upstream.taskId,\n      row_number: upstream.row_number,\n      currentIndex: upstream.currentIndex,\n      generateCount: upstream.generateCount\n    }\n  }];\n}"
+      },
+      "id": "5836f878-9af4-4460-9650-d6b14aa19382",
+      "name": "解析返回提取图片",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-success-001",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "24ba80dc-11e4-43a0-9572-77026311f0fb",
+      "name": "是否生成成功",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        928,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 将 base64 转为 binary 以便上传到 Google Drive\nconst item = $input.first().json;\nconst buffer = Buffer.from(item.imageBase64, 'base64');\n\nreturn [{\n  json: {\n    fileName: item.fileName,\n    taskId: item.taskId,\n    row_number: item.row_number,\n    currentIndex: item.currentIndex,\n    generateCount: item.generateCount\n  },\n  binary: {\n    data: {\n      data: buffer.toString('base64'),\n      mimeType: 'image/png',\n      fileName: item.fileName\n    }\n  }\n}];"
+      },
+      "id": "68a029a5-54b9-4c43-8f96-36cc4531ecbe",
+      "name": "base64转Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.fileName }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": "1i-H0UU58Q6UA9KxwcPpKnAZXiDU6URj1",
+        "options": {}
+      },
+      "id": "7c49dddc-1953-44fa-98ab-bfe66bae5508",
+      "name": "上传到GoogleDrive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1376,
+        -48
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "tvHsbz2KpZSHIuwN",
+          "name": "Google Drive account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// 生成 Google Drive 分享链接\nconst item = $input.first().json;\nconst driveFileId = item.id;\nconst driveLink = `https://drive.google.com/file/d/${driveFileId}/view`;\n\n// 从上游获取 row_number 等信息\nconst upstream = $('base64转Binary').first().json;\n\nreturn [{\n  json: {\n    driveFileId,\n    driveLink,\n    fileName: upstream.fileName,\n    taskId: upstream.taskId,\n    row_number: upstream.row_number,\n    currentIndex: upstream.currentIndex,\n    generateCount: upstream.generateCount\n  }\n}];"
+      },
+      "id": "dc8e3cb1-c273-4675-9636-589b102ce872",
+      "name": "生成Drive链接",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 聚合本轮成功的链接，存入静态变量，然后回到循环\nconst item = $input.first().json;\n\n// Code 节点里要用 $getWorkflowStaticData，不要用 this.getWorkflowStaticData\nconst staticData = $getWorkflowStaticData('global');\n\nif (!staticData.driveLinks) {\n  staticData.driveLinks = [];\n}\n\n// 存链接\nif (item.driveLink) {\n  staticData.driveLinks.push(item.driveLink);\n}\n\n// 把当前信息继续往后传，并告诉下游继续循环\nreturn [\n  {\n    json: {\n      ...item,\n      _loopback: true\n    }\n  }\n];"
+      },
+      "id": "2553bf32-d8bb-4735-99c5-cee01edb1d76",
+      "name": "暂存链接",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 失败时也回到循环继续处理下一张\nconst item = $input.first().json;\nreturn [{ json: { ...item, _loopback: true, _failed: true } }];"
+      },
+      "id": "28f49563-7f5f-44ad-ba2d-dc1fb9f6e8b9",
+      "name": "失败继续循环",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 所有循环结束，从 static data 取出所有链接，聚合回填\nconst staticData = $getWorkflowStaticData('global');\nconst allLinks = staticData.driveLinks || [];\n\n// 从循环前固定下来的参数节点读取\nconst params = $('解析参数+模型路由').first().json;\n\nconst result = {\n  taskId: params.taskId,\n  row_number: params.row_number,\n  allLinks: allLinks.join('\\n'),\n  successCount: allLinks.length,\n  generateCount: params.generateCount,\n};\n\n// 清空 static data，为下次执行做准备\nstaticData.driveLinks = [];\n\nif (allLinks.length === 0) {\n  return [{ json: { ...result, allFailed: true } }];\n}\n\nreturn [{ json: { ...result, allFailed: false } }];"
+      },
+      "id": "51c9d8c1-7150-4f6c-b8ab-e80905645e87",
+      "name": "聚合图片链接",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2256,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-allfailed-001",
+              "leftValue": "={{ $json.allFailed }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "18224146-02e0-4163-aea8-9ec1c7f5366b",
+      "name": "是否有成功的图",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        144
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1qWq3m7lFtG7EY-AuaJ2OBc-JrKUKjI07eqfaolJi2S4",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "输入表",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "生成结果链接": "={{ $json.allLinks }}",
+            "图片状态": "图片已生成",
+            "row_number": "={{ $json.row_number }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string"
+            },
+            {
+              "id": "生成结果链接",
+              "displayName": "生成结果链接",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": false,
+              "display": true,
+              "type": "string"
+            },
+            {
+              "id": "图片状态",
+              "displayName": "图片状态",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": false,
+              "display": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "7b7d2cc3-5b5d-4853-91a8-ab3905084684",
+      "name": "回填成功状态",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2704,
+        16
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "rW2neYdMN1LklYb7",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1qWq3m7lFtG7EY-AuaJ2OBc-JrKUKjI07eqfaolJi2S4",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "输入表",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "图片状态": "生成失败",
+            "row_number": "={{ $json.row_number }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "schema": [
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": true,
+              "canBeUsedToMatch": true,
+              "display": true,
+              "type": "string"
+            },
+            {
+              "id": "图片状态",
+              "displayName": "图片状态",
+              "required": false,
+              "defaultMatch": false,
+              "canBeUsedToMatch": false,
+              "display": true,
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "186151f5-c3b0-4354-8c30-b5c6ff700fe0",
+      "name": "标记失败状态",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2704,
+        272
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "rW2neYdMN1LklYb7",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.driveLinks = [];\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        144
+      ],
+      "id": "9e14220a-d3bc-4331-89b5-2b1e3cd848d9",
+      "name": "初始化链接缓存"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "手动触发": {
+      "main": [
+        [
+          {
+            "node": "读取待生成行",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取待生成行": {
+      "main": [
+        [
+          {
+            "node": "筛选待生成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "筛选待生成": {
+      "main": [
+        [
+          {
+            "node": "解析参数+模型路由",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析参数+模型路由": {
+      "main": [
+        [
+          {
+            "node": "按数量拆分任务",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "按数量拆分任务": {
+      "main": [
+        [
+          {
+            "node": "初始化链接缓存",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "逐张生图循环": {
+      "main": [
+        [
+          {
+            "node": "聚合图片链接",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "下载产品图转base64",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "下载产品图转base64": {
+      "main": [
+        [
+          {
+            "node": "组装API请求",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "组装API请求": {
+      "main": [
+        [
+          {
+            "node": "调用OpenRouter生图",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "调用OpenRouter生图": {
+      "main": [
+        [
+          {
+            "node": "解析返回提取图片",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析返回提取图片": {
+      "main": [
+        [
+          {
+            "node": "是否生成成功",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否生成成功": {
+      "main": [
+        [
+          {
+            "node": "base64转Binary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "失败继续循环",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "base64转Binary": {
+      "main": [
+        [
+          {
+            "node": "上传到GoogleDrive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "上传到GoogleDrive": {
+      "main": [
+        [
+          {
+            "node": "生成Drive链接",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "生成Drive链接": {
+      "main": [
+        [
+          {
+            "node": "暂存链接",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "暂存链接": {
+      "main": [
+        [
+          {
+            "node": "逐张生图循环",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "失败继续循环": {
+      "main": [
+        [
+          {
+            "node": "逐张生图循环",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "聚合图片链接": {
+      "main": [
+        [
+          {
+            "node": "是否有成功的图",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否有成功的图": {
+      "main": [
+        [
+          {
+            "node": "回填成功状态",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "标记失败状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "初始化链接缓存": {
+      "main": [
+        [
+          {
+            "node": "逐张生图循环",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "dd19f607-dbc7-4cd4-bc3b-1b2e27bf252e",
+  "meta": {
+    "instanceId": "c0e5b1ce27324592af68e1f90d1895c546386f8b01ba8a2d08b97b133727c1e8"
+  },
+  "id": "4aEBIqlHmeY3CVuF",
+  "tags": []
+}
